@@ -356,7 +356,8 @@ SamValidateNormalUser(
     _Out_ PRPC_SID* AccountDomainSidPtr,
     _Out_ SAMPR_HANDLE* UserHandlePtr,
     _Out_ PSAMPR_USER_INFO_BUFFER* UserInfoPtr,
-    _Out_ PNTSTATUS SubStatus)
+    _Out_ PNTSTATUS SubStatus,
+    _In_ BOOLEAN PasswordlessLogon)
 {
     NTSTATUS Status;
     SAMPR_HANDLE ServerHandle = NULL;
@@ -446,27 +447,30 @@ SamValidateNormalUser(
         goto done;
     }
 
-    Status = MsvpCheckPassword(PwdData, UserInfo);
-    if (!NT_SUCCESS(Status))
+    if (!PasswordlessLogon)
     {
-        ERR("MsvpCheckPassword failed (Status %08lx)\n", Status);
-        if (Status == STATUS_WRONG_PASSWORD)
+        Status = MsvpCheckPassword(PwdData, UserInfo);
+        if (!NT_SUCCESS(Status))
         {
-            *UserHandlePtr = UserHandle;
-            UserHandle = NULL;
+            ERR("MsvpCheckPassword failed (Status %08lx)\n", Status);
+            if (Status == STATUS_WRONG_PASSWORD)
+            {
+                *UserHandlePtr = UserHandle;
+                UserHandle = NULL;
+            }
+            goto done;
         }
-        goto done;
-    }
 
-    if (!PwdData->IsNetwork &&
-        !PwdData->TrustedClient &&
-        !UserInfo->All.NtPasswordPresent &&
-        MsvpLimitBlankPasswordUse())
-    {
-        ERR("Blank password not allowed for this caller!\n");
-        *SubStatus = STATUS_ACCOUNT_RESTRICTION;
-        Status = STATUS_ACCOUNT_RESTRICTION;
-        goto done;
+        if (!PwdData->IsNetwork &&
+            !PwdData->TrustedClient &&
+            !UserInfo->All.NtPasswordPresent &&
+            MsvpLimitBlankPasswordUse())
+        {
+            ERR("Blank password not allowed for this caller!\n");
+            *SubStatus = STATUS_ACCOUNT_RESTRICTION;
+            Status = STATUS_ACCOUNT_RESTRICTION;
+            goto done;
+        }
     }
 
     if (UserInfo->All.UserAccountControl & USER_ACCOUNT_DISABLED)
@@ -576,7 +580,8 @@ SamValidateUser(
     _Out_ PRPC_SID* AccountDomainSidPtr,
     _Out_ SAMPR_HANDLE* UserHandlePtr,
     _Out_ PSAMPR_USER_INFO_BUFFER* UserInfoPtr,
-    _Out_ PNTSTATUS SubStatus)
+    _Out_ PNTSTATUS SubStatus,
+    _In_ BOOLEAN PasswordlessLogon)
 {
     static const UNICODE_STRING NtAuthorityU = RTL_CONSTANT_STRING(L"NT AUTHORITY");
     static const UNICODE_STRING LocalServiceU = RTL_CONSTANT_STRING(L"LocalService");
@@ -648,7 +653,8 @@ SamValidateUser(
                                        AccountDomainSidPtr,
                                        UserHandlePtr,
                                        UserInfoPtr,
-                                       SubStatus);
+                                       SubStatus,
+                                       PasswordlessLogon);
         if (!NT_SUCCESS(Status))
         {
             ERR("SamValidateNormalUser() failed (Status 0x%08lx)\n", Status);

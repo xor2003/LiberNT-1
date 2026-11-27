@@ -1437,7 +1437,8 @@ LsaApLogonUserEx2_Network(
                              AccountDomainSidPtr,
                              UserHandlePtr,
                              UserInfoPtr,
-                             SubStatus);
+                             SubStatus,
+                             FALSE);
     if (!NT_SUCCESS(Status))
     {
         ERR("SamValidateUser failed with 0x%lx\n", Status);
@@ -1504,6 +1505,7 @@ LsaApLogonUserEx2(IN PLSA_CLIENT_REQUEST ClientRequest,
     PLOGON_LIST_ENTRY LogonEntry = NULL;
     BOOLEAN WellKnownLogon = FALSE, ExistingLogon = FALSE;
     BOOLEAN PlainNetwork;
+    BOOLEAN S4ULogon = FALSE;
 
     TRACE("LsaApLogonUserEx2()\n");
 
@@ -1531,7 +1533,106 @@ LsaApLogonUserEx2(IN PLSA_CLIENT_REQUEST ClientRequest,
                    ((PMSV1_0_INTERACTIVE_LOGON)ProtocolSubmitBuffer)->MessageType == MsV1_0InteractiveLogon;
 
     /* Parameters validation */
-    if (LogonType == Interactive ||
+    if ((LogonType == Network ||
+         LogonType == Interactive ||
+         LogonType == Batch ||
+         LogonType == Service) &&
+        SubmitBufferSize >= sizeof(MSV1_0_S4U_LOGON) &&
+        ((PMSV1_0_S4U_LOGON)ProtocolSubmitBuffer)->MessageType == MsV1_0S4ULogon)
+    {
+        /*
+         * Service-for-user (S4U) logon: the caller (a trusted service,
+         * e.g. sshd) vouches for the identity of the user; no credentials
+         * are presented or verified. The user is looked up in the SAM
+         * database and a logon session is created for it.
+         */
+        PMSV1_0_S4U_LOGON S4uLogonInfo;
+        ULONG_PTR PtrOffset;
+        PWCHAR AtSign;
+        ULONG Index;
+
+        if (SubmitBufferSize < sizeof(MSV1_0_S4U_LOGON))
+        {
+            ERR("Invalid SubmitBufferSize %lu\n", SubmitBufferSize);
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        S4uLogonInfo = (PMSV1_0_S4U_LOGON)ProtocolSubmitBuffer;
+
+        /* Fix-up pointers in the authentication info */
+        PtrOffset = (ULONG_PTR)ProtocolSubmitBuffer - (ULONG_PTR)ClientBufferBase;
+
+        /* UserPrincipalName is mandatory and cannot be an empty string */
+        if (S4uLogonInfo->UserPrincipalName.Length == 0)
+        {
+            ERR("Empty UserPrincipalName\n");
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        S4uLogonInfo->UserPrincipalName.Buffer = FIXUP_POINTER(S4uLogonInfo->UserPrincipalName.Buffer, PtrOffset);
+        S4uLogonInfo->UserPrincipalName.MaximumLength = S4uLogonInfo->UserPrincipalName.Length;
+
+        Status = RtlValidateUnicodeString(0, &S4uLogonInfo->UserPrincipalName);
+        if (!NT_SUCCESS(Status))
+            return STATUS_INVALID_PARAMETER;
+
+        /* Strip a trailing "@domain" part: local accounts are looked up by their bare user name */
+        AtSign = NULL;
+        for (Index = 0; Index < S4uLogonInfo->UserPrincipalName.Length / sizeof(WCHAR); Index++)
+        {
+            if (S4uLogonInfo->UserPrincipalName.Buffer[Index] == L'@')
+            {
+                AtSign = &S4uLogonInfo->UserPrincipalName.Buffer[Index];
+                break;
+            }
+        }
+        if (AtSign != NULL)
+        {
+            *AtSign = UNICODE_NULL;
+            S4uLogonInfo->UserPrincipalName.Length = (USHORT)(AtSign - S4uLogonInfo->UserPrincipalName.Buffer) * sizeof(WCHAR);
+        }
+
+        if (S4uLogonInfo->UserPrincipalName.Length == 0)
+        {
+            ERR("Empty user name in UserPrincipalName\n");
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        /* DomainName is optional; "." and an empty string both mean the local machine */
+        if (S4uLogonInfo->DomainName.Length)
+        {
+            S4uLogonInfo->DomainName.Buffer = FIXUP_POINTER(S4uLogonInfo->DomainName.Buffer, PtrOffset);
+            S4uLogonInfo->DomainName.MaximumLength = S4uLogonInfo->DomainName.Length;
+
+            Status = RtlValidateUnicodeString(0, &S4uLogonInfo->DomainName);
+            if (!NT_SUCCESS(Status))
+                return STATUS_INVALID_PARAMETER;
+        }
+        else
+        {
+            S4uLogonInfo->DomainName.Buffer = NULL;
+            S4uLogonInfo->DomainName.MaximumLength = 0;
+        }
+
+        LogonUserName = &S4uLogonInfo->UserPrincipalName;
+
+        if (S4uLogonInfo->DomainName.Length == 0 ||
+            (S4uLogonInfo->DomainName.Length == sizeof(WCHAR) &&
+             S4uLogonInfo->DomainName.Buffer != NULL &&
+             S4uLogonInfo->DomainName.Buffer[0] == L'.'))
+        {
+            LogonDomain = &ComputerName;
+        }
+        else
+        {
+            LogonDomain = &S4uLogonInfo->DomainName;
+        }
+
+        S4ULogon = TRUE;
+
+        TRACE("S4U logon, user: %wZ domain: %wZ\n", LogonUserName, LogonDomain);
+    }
+    else if (LogonType == Interactive ||
         LogonType == Batch ||
         LogonType == Service ||
         LogonType == Unlock ||
@@ -1677,7 +1778,7 @@ LsaApLogonUserEx2(IN PLSA_CLIENT_REQUEST ClientRequest,
     }
     // TODO: Add other LogonType validity checks.
 
-    if (LogonType != Network || PlainNetwork)
+    if (S4ULogon || LogonType != Network || PlainNetwork)
     {
         Status = SamValidateUser(LogonType,
                                  LogonUserName,
@@ -1688,7 +1789,8 @@ LsaApLogonUserEx2(IN PLSA_CLIENT_REQUEST ClientRequest,
                                  &AccountDomainSid,
                                  &UserHandle,
                                  &UserInfo,
-                                 SubStatus);
+                                 SubStatus,
+                                 S4ULogon);
         if (!NT_SUCCESS(Status))
             goto done;
     }
