@@ -41,7 +41,7 @@ NwifiFree(
 /* The caller uses the result only while servicing an IOCTL; interface
  * teardown is serialised by NDIS unbind at PASSIVE_LEVEL. */
 PNWIFI_ADAPTER
-NwifiFindAdapterByIndex(
+NwifiAcquireAdapterByIndex(
     _In_ ULONG InterfaceIndex)
 {
     PLIST_ENTRY Entry;
@@ -55,12 +55,20 @@ NwifiFindAdapterByIndex(
         PNWIFI_ADAPTER Adapter = CONTAINING_RECORD(Entry, NWIFI_ADAPTER, Link);
         if (Adapter->InterfaceIndex == InterfaceIndex)
         {
-            Found = Adapter;
+            if (ExAcquireRundownProtection(&Adapter->RundownRef))
+                Found = Adapter;
             break;
         }
     }
     NdisReleaseSpinLock(&gNwifi.AdapterLock);
     return Found;
+}
+
+VOID
+NwifiReleaseAdapter(
+    _In_ PNWIFI_ADAPTER Adapter)
+{
+    ExReleaseRundownProtection(&Adapter->RundownRef);
 }
 
 static const WCHAR NwifiFilterFriendlyName[] = L"LiberNT Native WiFi Filter";

@@ -301,13 +301,16 @@ NwifiIoctlIhvControl(
     InputLength = Control->InputLength;
     Length = max(InputLength, OutLen);
 
-    Adapter = NwifiFindAdapterByIndex(InterfaceIndex);
+    Adapter = NwifiAcquireAdapterByIndex(InterfaceIndex);
     if (Adapter == NULL)
         return STATUS_OBJECT_NAME_NOT_FOUND;
 
     Data = ExAllocatePoolWithTag(NonPagedPool, max(Length, 1), NWIFI_TAG);
     if (Data == NULL)
+    {
+        NwifiReleaseAdapter(Adapter);
         return STATUS_INSUFFICIENT_RESOURCES;
+    }
     RtlCopyMemory(Data, Control->Input, InputLength);
 
     NdisStatus = NwifiDoMethodRequest(Adapter,
@@ -317,6 +320,7 @@ NwifiIoctlIhvControl(
                                       Length,
                                       &Written,
                                       &Needed);
+    NwifiReleaseAdapter(Adapter);
     if (NdisStatus == NDIS_STATUS_SUCCESS)
     {
         if (Written > Length)
@@ -389,14 +393,21 @@ NwifiDispatchDeviceControl(
                 Status = STATUS_INVALID_PARAMETER;
                 break;
             }
-            Adapter = NwifiFindAdapterByIndex(Req->InterfaceIndex);
-            if (Adapter == NULL || Adapter->MsmContext == NULL)
+            Adapter = NwifiAcquireAdapterByIndex(Req->InterfaceIndex);
+            if (Adapter == NULL)
             {
                 Status = STATUS_OBJECT_NAME_NOT_FOUND;
                 break;
             }
             Msm = (PNWIFI_MSM)Adapter->MsmContext;
+            if (Msm == NULL)
+            {
+                NwifiReleaseAdapter(Adapter);
+                Status = STATUS_OBJECT_NAME_NOT_FOUND;
+                break;
+            }
             NdisStatus = NwifiMsmStartScan(Msm, Req->BssType, &Req->Ssid);
+            NwifiReleaseAdapter(Adapter);
             Status = NwifiMapNdisStatus(NdisStatus);
             break;
         }
@@ -414,14 +425,21 @@ NwifiDispatchDeviceControl(
              * header's InterfaceIndex field. */
             Index = (InLen >= sizeof(NWIFI_BSS_LIST)) ? ReqHdr->InterfaceIndex
                   : (InLen >= sizeof(ULONG)) ? *(PULONG)Buffer : 0;
-            Adapter = NwifiFindAdapterByIndex(Index);
-            if (Adapter == NULL || Adapter->MsmContext == NULL)
+            Adapter = NwifiAcquireAdapterByIndex(Index);
+            if (Adapter == NULL)
             {
                 Status = STATUS_OBJECT_NAME_NOT_FOUND;
                 break;
             }
             Msm = (PNWIFI_MSM)Adapter->MsmContext;
+            if (Msm == NULL)
+            {
+                NwifiReleaseAdapter(Adapter);
+                Status = STATUS_OBJECT_NAME_NOT_FOUND;
+                break;
+            }
             NdisStatus = NwifiMsmGetBssList(Msm, Buffer, OutLen, &Info);
+            NwifiReleaseAdapter(Adapter);
             Status = NwifiMapNdisStatus(NdisStatus);
             break;
         }
@@ -466,13 +484,19 @@ NwifiDispatchDeviceControl(
                 Status = STATUS_INVALID_PARAMETER;
                 break;
             }
-            Adapter = NwifiFindAdapterByIndex(Req->InterfaceIndex);
-            if (Adapter == NULL || Adapter->MsmContext == NULL)
+            Adapter = NwifiAcquireAdapterByIndex(Req->InterfaceIndex);
+            if (Adapter == NULL)
             {
                 Status = STATUS_OBJECT_NAME_NOT_FOUND;
                 break;
             }
             Msm = (PNWIFI_MSM)Adapter->MsmContext;
+            if (Msm == NULL)
+            {
+                NwifiReleaseAdapter(Adapter);
+                Status = STATUS_OBJECT_NAME_NOT_FOUND;
+                break;
+            }
 
             RtlZeroMemory(&Params, sizeof(Params));
             Params.Ssid = Req->Ssid;
@@ -498,6 +522,7 @@ NwifiDispatchDeviceControl(
                              Req->AuthAlgorithm == DOT11_AUTH_ALGO_WPA3_SAE);
 
             NdisStatus = NwifiMsmConnect(Msm, &Params);
+            NwifiReleaseAdapter(Adapter);
             Status = NwifiMapNdisStatus(NdisStatus);
             break;
         }
@@ -515,14 +540,21 @@ NwifiDispatchDeviceControl(
                 Status = STATUS_INVALID_PARAMETER;
                 break;
             }
-            Adapter = NwifiFindAdapterByIndex(Ref->InterfaceIndex);
-            if (Adapter == NULL || Adapter->MsmContext == NULL)
+            Adapter = NwifiAcquireAdapterByIndex(Ref->InterfaceIndex);
+            if (Adapter == NULL)
             {
                 Status = STATUS_OBJECT_NAME_NOT_FOUND;
                 break;
             }
             Msm = (PNWIFI_MSM)Adapter->MsmContext;
+            if (Msm == NULL)
+            {
+                NwifiReleaseAdapter(Adapter);
+                Status = STATUS_OBJECT_NAME_NOT_FOUND;
+                break;
+            }
             NdisStatus = NwifiMsmDisconnect(Msm);
+            NwifiReleaseAdapter(Adapter);
             Status = NwifiMapNdisStatus(NdisStatus);
             break;
         }
@@ -545,14 +577,21 @@ NwifiDispatchDeviceControl(
             }
             Index = (InLen >= sizeof(NWIFI_INTERFACE_REF)) ? Ref->InterfaceIndex
                   : (InLen >= sizeof(ULONG)) ? *(PULONG)Buffer : 0;
-            Adapter = NwifiFindAdapterByIndex(Index);
-            if (Adapter == NULL || Adapter->MsmContext == NULL)
+            Adapter = NwifiAcquireAdapterByIndex(Index);
+            if (Adapter == NULL)
             {
                 Status = STATUS_OBJECT_NAME_NOT_FOUND;
                 break;
             }
             Msm = (PNWIFI_MSM)Adapter->MsmContext;
+            if (Msm == NULL)
+            {
+                NwifiReleaseAdapter(Adapter);
+                Status = STATUS_OBJECT_NAME_NOT_FOUND;
+                break;
+            }
             NwifiMsmQueryState(Msm, (PNWIFI_LINK_STATE)Buffer);
+            NwifiReleaseAdapter(Adapter);
             Info = sizeof(NWIFI_LINK_STATE);
             Status = STATUS_SUCCESS;
             break;
@@ -573,14 +612,21 @@ NwifiDispatchDeviceControl(
                 Status = STATUS_INVALID_PARAMETER;
                 break;
             }
-            Adapter = NwifiFindAdapterByIndex(Key->InterfaceIndex);
-            if (Adapter == NULL || Adapter->MsmContext == NULL)
+            Adapter = NwifiAcquireAdapterByIndex(Key->InterfaceIndex);
+            if (Adapter == NULL)
             {
                 Status = STATUS_OBJECT_NAME_NOT_FOUND;
                 break;
             }
             Msm = (PNWIFI_MSM)Adapter->MsmContext;
+            if (Msm == NULL)
+            {
+                NwifiReleaseAdapter(Adapter);
+                Status = STATUS_OBJECT_NAME_NOT_FOUND;
+                break;
+            }
             NdisStatus = NwifiMsmSetKey(Msm, Key);
+            NwifiReleaseAdapter(Adapter);
             Status = NwifiMapNdisStatus(NdisStatus);
             break;
         }
@@ -604,7 +650,7 @@ NwifiDispatchDeviceControl(
                 break;
             }
             Index = Ref->InterfaceIndex;
-            Adapter = NwifiFindAdapterByIndex(Index);
+            Adapter = NwifiAcquireAdapterByIndex(Index);
             if (Adapter == NULL)
             {
                 Status = STATUS_OBJECT_NAME_NOT_FOUND;
@@ -618,6 +664,7 @@ NwifiDispatchDeviceControl(
             List = (PDOT11_AUTH_CIPHER_PAIR_LIST)NwifiAllocate(ListSize);
             if (List == NULL)
             {
+                NwifiReleaseAdapter(Adapter);
                 Status = STATUS_INSUFFICIENT_RESOURCES;
                 break;
             }
@@ -629,6 +676,7 @@ NwifiDispatchDeviceControl(
             NdisStatus = NwifiDoRequest(Adapter, NdisRequestQueryInformation,
                                                 OID_DOT11_SUPPORTED_UNICAST_ALGORITHM_PAIR,
                                                 List, ListSize, NULL);
+            NwifiReleaseAdapter(Adapter);
             if (NdisStatus == NDIS_STATUS_BUFFER_OVERFLOW ||
                 NdisStatus == NDIS_STATUS_BUFFER_TOO_SHORT ||
                 NdisStatus == NDIS_STATUS_INVALID_LENGTH)
@@ -679,7 +727,7 @@ NwifiDispatchDeviceControl(
                 Info = sizeof(NWIFI_INTERFACE_CAPABILITY);
                 break;
             }
-            Adapter = NwifiFindAdapterByIndex(Ref->InterfaceIndex);
+            Adapter = NwifiAcquireAdapterByIndex(Ref->InterfaceIndex);
             if (Adapter == NULL)
             {
                 Status = STATUS_OBJECT_NAME_NOT_FOUND;
@@ -695,6 +743,7 @@ NwifiDispatchDeviceControl(
                                         &ExtSta, sizeof(ExtSta), NULL);
             if (NdisStatus != NDIS_STATUS_SUCCESS)
             {
+                NwifiReleaseAdapter(Adapter);
                 Status = NwifiMapNdisStatus(NdisStatus);
                 break;
             }
@@ -702,6 +751,7 @@ NwifiDispatchDeviceControl(
             PhyTypes = (PDOT11_SUPPORTED_PHY_TYPES)NwifiAllocate(PhyLength);
             if (PhyTypes == NULL)
             {
+                NwifiReleaseAdapter(Adapter);
                 Status = STATUS_INSUFFICIENT_RESOURCES;
                 break;
             }
@@ -711,6 +761,7 @@ NwifiDispatchDeviceControl(
             if (NdisStatus != NDIS_STATUS_SUCCESS)
             {
                 NwifiFree(PhyTypes);
+                NwifiReleaseAdapter(Adapter);
                 Status = NwifiMapNdisStatus(NdisStatus);
                 break;
             }
@@ -731,6 +782,7 @@ NwifiDispatchDeviceControl(
             Out->NumberOfPhyTypes = Count;
             RtlCopyMemory(Out->PhyTypes, PhyTypes->dot11PHYType, Count * sizeof(DOT11_PHY_TYPE));
             NwifiFree(PhyTypes);
+            NwifiReleaseAdapter(Adapter);
             Info = sizeof(*Out);
             Status = STATUS_SUCCESS;
             break;

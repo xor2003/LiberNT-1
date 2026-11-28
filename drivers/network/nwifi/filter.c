@@ -275,6 +275,7 @@ NwifiFilterAttach(
 
     InitializeListHead(&Adapter->Link);
     NdisAllocateSpinLock(&Adapter->DataLock);
+    ExInitializeRundownProtection(&Adapter->RundownRef);
     Adapter->FilterHandle = NdisFilterHandle;
     Adapter->State = NwifiStatePaused;
     Adapter->CurrentLookahead = ETH_MAX_FRAME;
@@ -326,14 +327,16 @@ NwifiFilterDetach(
     DPRINT1("NWIFI: detaching interface %u\n", Adapter->InterfaceIndex);
 
     Adapter->State = NwifiStateHalting;
-    if (Adapter->Announced)
-        NwifiMsmInterfaceRemoval(Adapter);
-    NwifiMsmDestroy(Adapter);
 
     NdisAcquireSpinLock(&gNwifi.AdapterLock);
     RemoveEntryList(&Adapter->Link);
     NdisReleaseSpinLock(&gNwifi.AdapterLock);
 
+    ExWaitForRundownProtectionRelease(&Adapter->RundownRef);
+
+    if (Adapter->Announced)
+        NwifiMsmInterfaceRemoval(Adapter);
+    NwifiMsmDestroy(Adapter);
     NwifiDestroyAdapter(Adapter);
 }
 
